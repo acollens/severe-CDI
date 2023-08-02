@@ -5,18 +5,27 @@ library(glue)
 library(here)
 library(schtools)
 library(tidyverse)
+
+#create variables in local environment so they don't have to come from snakemake
+feat_dat <- read_csv("results/feature-importance_results_aggregated.csv")
+
+# Kelly's script below
 percent_ci <- 75
 filter_top_feats <- function(feat_dat, 
                              frac_important_threshold = 0.75,
-                             otu_col = label_html, 
-                             outcome_col = outcome,
-                             ds_col = dataset) {
+                             otu_col = names#, 
+                             #outcome_col = outcome,
+                             #ds_col = dataset
+                             ) {
   n_models <- feat_dat %>% pull(seed) %>% unique() %>% length()
   message(glue("# models: {n_models}"))
   feat_dat %>%
     mutate(is_important = perf_metric_diff > 0) %>%
     filter(is_important) %>%
-    group_by({{ otu_col }}, {{ outcome_col }}, {{ ds_col }}) %>%
+    group_by({{ otu_col }}#, 
+             #{{ outcome_col }},
+             #{{ ds_col }}
+             ) %>%
     summarise(
       frac_important = sum(is_important) / n_models,
       mean_perf_diff = mean(perf_metric_diff)
@@ -28,28 +37,36 @@ filter_top_feats <- function(feat_dat,
 model_colors <- RColorBrewer::brewer.pal(4, 'Dark2')
 names(model_colors) <- c("idsa", 'attrib', 'allcause', 'pragmatic')
 
-feat_dat <- read_csv("results/feature-importance_results_aggregated.csv") %>% 
-  rename(otu = feat)
-tax_dat <- schtools::read_tax("data/mothur/alpha/cdi.taxonomy")
-alpha_level <- 0.05
+dat <- read_csv("results/feature-importance_results.csv") %>% 
+  rename(names = names)
 
-dat <- left_join(feat_dat, tax_dat, by = 'otu') %>% filter(dataset == 'full')
+
+# tax_dat <- schtools::read_tax("data/mothur/alpha/cdi.taxonomy")
+# alpha_level <- 0.05
+# 
+# dat <- left_join(feat_dat, tax_dat, by = 'otu') %>% filter(dataset == 'full')
+
 dat_top_otus <- dat %>% 
   filter_top_feats(frac_important_threshold = percent_ci/100) %>% 
   mutate(is_signif = TRUE)
 
 top_otus_order <- dat_top_otus %>% 
-  group_by(label_html) %>% 
-  summarize(max_med = max(mean_perf_diff)) %>% 
-  filter(max_med >= 0.01) %>% 
-  arrange(max_med) %>% 
-  pull(label_html)
-dat_top_otus <- dat_top_otus %>% filter(label_html %in% top_otus_order)
+  group_by(names) %>% 
+   summarize(max_med = max(mean_perf_diff)) %>% 
+   filter(max_med >= 0.0001) %>% 
+   arrange(max_med) %>% 
+   pull(names)
+dat_top_otus <- dat_top_otus %>% filter(names %in% top_otus_order)
 
 top_feats_dat <- dat %>% 
-  filter(label_html %in% top_otus_order, !(dataset == 'int' & outcome == 'pragmatic')) %>% 
+  filter(names %in% top_otus_order, 
+         #!(dataset == 'int' & outcome == 'pragmatic')
+         ) %>% 
   left_join(dat_top_otus, 
-            by = c('label_html', 'outcome', 'dataset')) 
+            by = c('names'#,
+                   #'outcome', 
+                   #'dataset'
+                   )) 
 
 relabun_dat <- data.table::fread(here('data', 'mothur', 'alpha', 
                                       'cdi.opti_mcc.shared')) %>% 
@@ -80,27 +97,28 @@ top_feats_means <- top_feats_dat %>%
   summarize(med_auroc_diff = mean(perf_metric_diff),
   ) %>% 
   full_join(relabun_means %>% 
-              filter(label_html %in% top_otus_order) %>% 
+              filter(names %in% top_otus_order) %>% 
               select(outcome, tax_otu_label, med_rel_abun),
             relationship = 'many-to-many')
 top_feats_means %>% 
   write_csv(here('results', 'top_features.csv'))
 
 # FEATURE IMPORTANCE
-feat_imp_plot <- top_feats_dat %>% 
-  filter(dataset == 'full') %>% 
-  mutate(label_html = factor(label_html, levels = top_otus_order),
-         dataset = case_when(dataset == 'full' ~ 'Full datasets',
-                             TRUE ~ 'Intersection'),
-         outcome = factor(outcome, levels = c('idsa', 'allcause', 'attrib', 'pragmatic')),
+ top_feats_dat %>% 
+  #filter(dataset == 'full') %>% 
+  mutate(
+        #names = factor(names, levels = top_otus_order),
+         #dataset = case_when(dataset == 'full' ~ 'Full datasets',
+         #                    TRUE ~ 'Intersection'),
+         #outcome = factor(outcome, levels = c('idsa', 'allcause', 'attrib', 'pragmatic')),
          is_signif = factor(case_when(is.na(is_signif) ~ 'No',
                                       TRUE ~ 'Yes'),
                             levels = c('Yes', 'No')
          )
   ) %>% 
   ggplot(aes(x = perf_metric_diff, 
-             y = label_html, 
-             color = outcome,
+             y = names, 
+             #color = outcome,
              shape = is_signif,
              size = is_signif))+
   stat_summary(fun = 'mean', 
@@ -112,7 +130,7 @@ feat_imp_plot <- top_feats_dat %>%
              lwd = 0.5, colour = "grey92") +
   geom_vline(xintercept = 0, linetype = 'dotted') +
   scale_color_manual(values = model_colors,
-                     labels = c(idsa='IDSA', attrib='Attributable', allcause='All-cause', pragmatic='Pragmatic'),
+                     #labels = c(idsa='IDSA', attrib='Attributable', allcause='All-cause', pragmatic='Pragmatic'),
                      guide = guide_legend(label.position = "bottom",
                                           title = "Severity Definition",
                                           title.position = 'top',
@@ -145,15 +163,15 @@ feat_imp_plot <- top_feats_dat %>%
 
 # RELATIVE ABUNDANCE
 relabun_plot <- relabun_means %>% 
-  filter(label_html %in% top_otus_order) %>% 
-  mutate(label_html = factor(label_html, levels = top_otus_order),
+  filter(names %in% top_otus_order) %>% 
+  mutate(names = factor(names, levels = top_otus_order),
          outcome = factor(outcome, levels = c('idsa', 'allcause', 'attrib', 'pragmatic')),
          med_rel_abun = med_rel_abun + tiny_constant,
          is_severe = factor(str_to_sentence(is_severe),
                             levels = c('Yes', 'No')),
          dataset = 'Full datasets'
   ) %>% 
-  ggplot(aes(x = med_rel_abun, y = label_html,
+  ggplot(aes(x = med_rel_abun, y = names,
              color = outcome, shape = is_severe, group = outcome)) +
   geom_point(position = position_dodge(width = 0.9),
              alpha=0.6) +
@@ -187,6 +205,10 @@ relabun_plot <- relabun_means %>%
 
 fig <- plot_grid(feat_imp_plot, relabun_plot,
                  ncol = 2, rel_widths = c(1, 0.4), align = 'h', axis = 'tb')
+
+#create in the plot window, delete later
+plot_grid(feat_imp_plot, relabun_plot,
+          ncol = 2, rel_widths = c(1, 0.4), align = 'h', axis = 'tb')
 
 ggsave(
   filename = here('figures', 'feature-importance_full.png'), 
